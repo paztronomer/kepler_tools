@@ -1,50 +1,67 @@
+'''This script takes the Kepler fits Long cadence files (using funtion Read_lc() ), applies a function called StepFit() to fix the gaps in mean flux between quarters, and finally save LCs.
+The script requires as input a list of all KIC to be processed (integer)
+Outliers are removed using Iglewicz and Hoaglin criteria
+
+Note:pandas.sort() and pandas.drop_duplicates() causes some troubles when run on some architectures (big-endian conflict with little-endian processor). So were replaced by numpy functions:
+ pandas.sort() >>> idx_sort = df_lc['time'].values[:].argsort()
+ pandas.drop_duplicates >>> numpy.unique(array)
+
 '''
- Script: FitsToCSV
- Version: 04
- This script takes the Kepler fits Long cadence files (using funtion Read_lc() ), applies a function 
- called StepFit() to fix the gaps in mean flux between quarters, and finally save 2 types of 
- light curves: 
-  --- a complete version (time,time_corr,nflux,nflux_corr,quarter) and 
-  --- a reduced version (time, nflux)
-
- The script requires as input a list of all KIC to be processed, in format 'kplrNNNNNNNNN'
- Also...
- 1) remove 3.5sigma outliers (flux), quarter by quarter, in the Read_lc() function
- 2) pandas.sort() and pandas.drop_duplicates() causes some troubles due to pc architecture 
- (big-endian conflict with little-endian processor).
- So were replaced by numpy functions:
-            pandas.sort() >>> idx_sort = df_lc['time'].values[:].argsort()
-            pandas.drop_duplicates >>> numpy.unique(array)
- 3) save only from quarter 1 forward, exclude quarter 0
-
- Python version: 2.7n
-
- If use/modify, refer Francisco Paz-Chinchon, francisco at dfte.ufrn.br , 
- UFRN, Brazil. 2014.
-
- Have fun & play your game.
-'''
-#_______________________________________________________________________________
-# further PYFITS resources see: http://pythonhosted.org/pyfits/users_guide/users_tutorial.html#opening-a-fits-file
-# to indent in emacs: C-u C-x TAB and to select again C-x C-x
-#
+# Python version: 2.7n
+# If use/modify, refer Francisco Paz-Chinchon 
+# Have fun & play your game.
 
 import os                        # walk through directories
-import pyfits as pyf             # handle fits
 import pandas                    # dataframe use
 from pandas import *
 import numpy as np               # numpy
 import time                      # to see time
 import gc                           # to free memory
-from sys import exit             # use exit(0) to exit programm
+from sys import exit             # use exit(0) to exit program
+#depending of which is installed:
+import pyfits as pyf             # handle fits
+#import astropy.io.fits as pyf # handle fits
+'''
+import scipy                     # tools
+from scipy.stats import nanmean  # package to calculate mean, ignoring nan
+import matplotlib.pyplot as plt             # plotting tools
+'''
 
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#
-#                    F U N C T I O N S
-#
 
-#                    Read LCs
-#
+def IHcriteria(flux_q):
+    ''' Estimate Iglewicz and Hoaglin criteria for outlier 
+    http://www.itl.nist.gov/div898/handbook/eda/section3/eda35h.htm
+    Formula:
+    Z=0.6745(x_i - median(x)) / MAD
+    if abs(z) > 3.5, x_i is a potential outlier
+    Reference:
+    Boris Iglewicz and David Hoaglin (1993), "Volume 16: How to Detect and Handle Outliers", The ASQC Basic References in Quality Control: Statistical Techniques, Edward F. Mykytka, Ph.D., Editor. 
+    
+    To have like an ace up the sleeve:
+    from statsmodels.robust import scale #mad
+    scale.mad(xarray, c=1, axis=0, center=np.median)
+    '''
+    from scipy.stats import norm
+
+    # Percent point function (inverse of cdf -- percentiles) of a normal continous random variable
+    cte = norm.ppf(0.75) #aprox 0.6745
+    
+    # MAD
+    MAD = np.median(np.abs(flux_q-np.median(flux_q)))
+    
+    # Array, the Iglewicz and Hoaglin scorer.
+    # If absolute value of Zscore_i is higher than 3.5 it is a possible outlier
+    Zscore = np.abs( cte*(flux_q-np.median(flux_q))/MAD )
+    
+    if len(Zscore[Zscore<3.5])>0:
+      #return a boolean array to be used for outlier removal
+      return Zscore<3.5
+    else:
+      print '\n\tError in outlier removal'
+      exit(0)
+      return
+
+
 def Read_lc(fileLC):
   hdu_lc = pyf.open(fileLC, memmap=True)  # hdu is a Python like list
   KIC = int( hdu_lc[0].header['KEPLERID'] )
@@ -64,49 +81,45 @@ def Read_lc(fileLC):
   timeJD_corr = timeJD_corr[~np.isnan(pdc_initial)]
   pdc = pdc_initial[~np.isnan(pdc_initial)]
   pdc_err = pdc_err[~np.isnan(pdc_initial)]
+  toNorm = pdc.mean()
   
-  pdc = pdc / pdc.mean() # mean avoiding NaN, using numpy
+  pdc = pdc / toNorm # mean avoiding NaN, using numpy
+  # In case of Nan values, can use:
+  # pdc = pdc / nanmean(pdc)
+  # nanmean calculates the mean of an array, without
+  # consider nan values. This package is from scipy.stats
     
   # to deal with the error in the normalized flux:
-  pdc_err = pdc_err / pdc.mean()
+  pdc_err = pdc_err / toNorm
   
   hdu_lc.close() # closes the hdu
   # time and pdc are numpy.arrays
   # I'm gonna construct a data frame for the signal, normalized by its
   # average
     
-  # O u t l i e r s  removal
-  # In each quarter, flux data out 3.5sigma will be erased
-  # This value is arbitrary. I suggest to use the Z score based on MAD
-  sigma_f = pdc.std()
-  deg3_fit = np.poly1d( np.polyfit(timeJD, pdc, 3) )
-  # evaluate in all the flux array. Abs value
-  pdc_diff = np.abs( deg3_fit(timeJD)-pdc )
-  pdc = pdc[pdc_diff < 3.5*sigma_f]
-  timeJD = timeJD[pdc_diff < 3.5*sigma_f]
-  pdc_err = pdc_err[pdc_diff < 3.5*sigma_f]
-  timeJD_corr = timeJD_corr[pdc_diff < 3.5*sigma_f]
+  # Outliers  removal
+  # instead of use n.n*sigma, Hoaglin criteria will be employed
+  # In each quarter,outliers will be removed, based on Iglewicz and Hoaglin criteria
+  pdc_res = pdc[IHcriteria(pdc)]
+  timeJD = timeJD[IHcriteria(pdc)]
+  pdc_err = pdc_err[IHcriteria(pdc)]
+  timeJD_corr = timeJD_corr[IHcriteria(pdc)]
 
-  # Add quarter as a third column, to made the linear fit
-  Q_arr = np.linspace(int(Q),int(Q),len(pdc)) #number of elemnts is tha same as time series
-  
-  # df_tserie = DataFrame({'1.time':timeJD, '2.time_corr':timeJD_corr, '3.nflux':pdc, '4.nflux_err':pdc_err, '5.Q':Q_arr})
-  df_tserie = DataFrame({'time':timeJD, 'time_corr':timeJD_corr, 'nflux':pdc, 'nflux_err':pdc_err, 'Q':Q_arr})
-  # note that the flux is already normalized, so
-  # the quartes can be simply joined into one
+  # Add quarter as column, to made the linear fit
+  Q_arr = np.linspace(int(Q),int(Q),len(pdc_res)) #number of elemnts is tha same as time series
+
+  df_tserie = DataFrame({'time':timeJD, 'time_corr':timeJD_corr, 'nflux':pdc_res, 'nflux_err':pdc_err, 'Q':Q_arr})
     
   return df_tserie, additional
 
 
-#                    Fit a 1st order polinome and adjust differences
-#
+# Fit a 1st order polinome and adjust differences
 def StepFit(df_timeser):
   # receives the temporal series as a dataframe with 3 columns: time, nflux, Q
   # NaN must be already droped
   # df must be already sorted by time
   
   # An array of quarters, non duplicate items.
-  # nondup = df_timeser.drop_duplicates(cols=['Q'] )['Q'].values # only 'Q' column
   nondup = np.unique(df_timeser['Q'].values)
   
   # Go through time series, quarter by quarter
@@ -131,38 +144,55 @@ def StepFit(df_timeser):
   else:
     df_Fit = df_timeser
     print 'no fit made, only ONE quarter in LC'
-
+  #return out of ELSE statement
   return df_Fit
 
 
-# <><><><><><><><><><><><><><><><><><><><>
-#
-#                C O R P U S
-#
-# <><><><><><><><><><><><><><><><><><><><>
+def VerboseID(kic_int):
+  kic_str = []
+  kic_int = map(str,kic_int)
+  for i in range(0,len(kic_int)):
+    if len(kic_int[i]) == 5:
+      kic_str.append('kplr0000' + kic_int[i])
+    elif len(kic_int[i]) == 6:
+      kic_str.append('kplr000' + kic_int[i])
+    elif len(kic_int[i]) == 7:
+      kic_str.append('kplr00' + kic_int[i])
+    elif len(kic_int[i]) == 8:
+      kic_str.append('kplr0' + kic_int[i])
+    elif len(kic_int[i]) == 9:
+      kic_str.append('kplr' + kic_int[i])
+    else:
+      print '\n\tDummy function encountered some error'
+      exit(0)
+  return kic_str
+
+
 if __name__ == "__main__":
 
   general_time = time.time()
-
-  # Superior-Path to files
-  path_fits = 'somewhere_folder'
+  kic_file = 'koi.txt'
+  path_fits = '/dados/home/fcoj/Work/KOI/fits_Dec2013'
+  path_out = '/dados/home/fcoj/Work/KOI/methComp_lcurves/'
   
   # Filename of the IDs list
-  df_IDs = read_table('IDS_list.csv',sep=',') #list of type kplr00xxxxxxx
+  IDs = np.loadtxt(kic_file,dtype='int')
+  IDs = VerboseID(IDs)
 
   print '\n\tworking...\n'
 
   # Main sample to add to output files
-  MAINSAMPL = 'sample01'
-  RUN_i = 'run01'
+  MAINSAMPL = 'd13'
+  RUN_i = 'koi'
+  print RUN_i
   
-  # to harbor KICs that are not found in the folder
+  # to harbor KICs thata are not in folder
   summary_ls = []
 
   # Walk around folders and subfolders, ID by ID
   info_aux = [[],[],[]]
   
-  for index1,kplr_id in enumerate( df_IDs['kic_name'].values ):
+  for index1,kplr_id in enumerate(IDs):
     # free memory
     gc.collect()
     counter_Qs = 0 # in each KIC it resets
@@ -189,12 +219,11 @@ if __name__ == "__main__":
             # this way, a single LC is constructed for
             # each ID
             
-            # NOTE: partial LCs are not charged chronologically so I MUST SORT THEM!
+            # NOTE: partial LCs are not loaded chronologically so I MUST SORT
             
             # Up to here, the dataframe of the entire Ligth Curve is in: df_lc
-            # Remember it has 3 columns: flux, time, quarter
             #     
-    # I must discriminate between LCs with one querter and LCs with more than one quarter,
+    # I must discriminate between LCs with one quarter and LCs with more than one quarter,
     # in order to perform (or not):  sort, Fit, reset of indices
 
     # Use only quarters from 1, not including quarter 0
@@ -208,39 +237,22 @@ if __name__ == "__main__":
     if (index1+1)%100 == 0: 
       print '\t\t\t>>> LC number: {0} \t elapsed time: {1} h'.format(index1+1, (time.time()-general_time)/3600.)
 
-    #
-    #          CASE 1) O N L Y  O N E  QUARTER
-    #
+    ''' CASE 1) O N L Y  O N E  QUARTER
+    '''
     if counter_Qs == 1:
       print '\n\t\t>>> there is ONLY ONE quarter for {0}'.format(kplr_id)
-      #                       MAKE UP
-      #                       ------------
-      #           1.- Sort LC using time
-      # Do not need to sort because we assume the time series is already sorted in the quarter
-        
-      #           2.- Reset index
-      # As no sort is performed, we not need to reset indices
-
-      #           3.- Fit a line (a*x+b) Q by Q
-      # As only one quarter is present, no Fit can be done between quarters
-
-      #           4.- Save CSV light curves
-      # 2 types, the classical and the full
-      fname =  MAINSAMPL + '.' + RUN_i + '_' + kplr_id + '.dat'
-      fname2 = MAINSAMPL + '.' + RUN_i + '_' + kplr_id + '_full.csv'
-      df_tmp = df_lc[['time', 'nflux']]
-      df_tmp.to_csv(fname, sep=' ', header=False, index=False) # without header!!!
+      # Save CSV light curves
+      # 3 types, the classical (comma-separated) and the full (comma-separated)
+      fname = path_out + MAINSAMPL + '.' + RUN_i + '_' + kplr_id + '.csv'
+      fname2 =  path_out + MAINSAMPL + '.' + RUN_i + '_' + kplr_id + '_full.csv'
+      df_tmp = df_lc[['time','nflux','nflux_err']]
+      df_tmp.to_csv(fname, sep=',', header=False, index=False) # without header!!!
       df_lc.to_csv(fname2, sep=',', header=True, index=False)
-    
-      #...................................................................................................................
-
-
-
-    #
-    #          CASE 2) M O R E  THAN  O N E  QUARTER
-    #
+      
+      '''CASE 2) MORE THAN ONE QUARTER
+      '''
     elif counter_Qs > 1:
-      #           1.- Sort LC using time
+      # Sort LC using time
       # Due to LC is a merge of LCs with NO CHRONOLOGICAL order, we must sort
       # using time.
       idx_sort = df_lc['time'].values[:].argsort()
@@ -251,45 +263,37 @@ if __name__ == "__main__":
       # problems with big-endian / little-endian
       # df_lc = df_lc.sort(['time'], ascending=[True])
         
-      #           2.- Reset index
+      # Reset index
       # After sort, indices must be re-written
       # VERY IMPORTANT POINT!
       df_lc = df_lc.reset_index(drop=True)
 
-      #           3.- Fit a line (a*x+b) Q by Q
+      # Banjai
+      # Fit a line (a*x+b) Q by Q
       # A linear fit is performed quarter by quarter (in pairs), and the offset is applied 
       # to the 2nd
       df_lc = StepFit( df_lc )
 
-      #          4.- Save CSV light curves
-      # 2 types, the classical and the full
-      fname = MAINSAMPL +  '.' + RUN_i + '_' + kplr_id + '.dat'
-      fname2 = MAINSAMPL +  '.' + RUN_i + '_' + kplr_id + '_full.csv'
-      df_tmp = df_lc[['time', 'nflux']]
-      df_tmp.to_csv(fname, sep=' ', header=False, index=False) # without header!!!
+      # Save CSV light curves
+      # 3 types, the classical (comma-separated) and the full (comma-separated)
+      fname = path_out + MAINSAMPL + '.' + RUN_i + '_' + kplr_id + '.csv'
+      fname2 =  path_out + MAINSAMPL + '.' + RUN_i + '_' + kplr_id + '_full.csv'
+      df_tmp = df_lc[['time','nflux','nflux_err']]
+      df_tmp.to_csv(fname, sep=',', header=False, index=False) # without header!!!
       df_lc.to_csv(fname2, sep=',', header=True, index=False)
       
-  # closing the FOR... 
-  # OUT OF FOR THAT WALK THROUGH KICs...
-
-  #                        W R I T E  I N F O  T O  F I L E S (II)
-  #
-  # GENERAL:   To Save the additional info of each light curve
+  # Addditional info
+  # To Save the additional info of each light curve
   df_AddInfo = DataFrame({'1_KIC':info_aux[0][:],'2_Quarter':info_aux[1][:],'3_Season':info_aux[2][:]})
   fn_addinfo = MAINSAMPL +'.' + RUN_i + '_pdc_LCsInfo.csv'
   df_AddInfo.to_csv(fn_addinfo, sep=',', index=False, header=True)
-  
-  # GENERAL: missed KIC
+  # Missed KIC
   if len(summary_ls) > 0:
-    fn_miss = MAINSAMPL + '.' + RUN_i + '_FitsToCSV_noKIC.csv'
-    DataFrame({'Missed_KIC':summary_ls}).to_csv(fn_miss,index=False, header=True)
-  #...................................................................................................................
+    fn_miss = MAINSAMPL + '.' + RUN_i + '_missed.csv'
+    DataFrame({'Missed_KIC':summary_ls}).to_csv(fn_miss,index=False, header=True)    
     
-    
-  print '\t\t>>>FITS to CSV ended!!!'
+  print '\t\t>>> fits2csv ended'
   print 'Total elapsed time: {0} hours'.format( (time.time()-general_time)/3600. )
-
-
 
 else:
   print '\n\t\t NOTE: this script is was imported from another script/program'
