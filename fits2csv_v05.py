@@ -1,15 +1,38 @@
-'''This script takes the Kepler fits Long cadence files (using funtion Read_lc() ), applies a function called StepFit() to fix the gaps in mean flux between quarters, and finally save LCs.
-The script requires as input a list of all KIC to be processed (integer)
-Outliers are removed using Iglewicz and Hoaglin criteria
+# Script: fits2csv (former FitsToCSV)
+# Version: 01
+# This script takes the Kepler fits Long cadence files (using funtion Read_lc() ), applies a function 
+# called StepFit() to fix the gaps in mean flux between quarters, and finally save 2 types of 
+# light curves: 
+#  --- a complete version (time,time_corr,nflux,nflux_corr,quarter) and 
+#  --- a reduced version (time, nflux)
+#
+# The script requires as input a list of all KIC to be processed, in format 'kplrNNNNNNNNN'
+#
+# Updates v02:
+# 1) remove 3.5sigma outliers (flux), quarter by quarter, in the Read_lc() function
+# 2) pandas.sort() and pandas.drop_duplicates() causes some troubles when run on 
+# cluster, due to pc architecture (big-endian conflict with little-endian processor).
+# So were replaced by numpy functions:
+#            pandas.sort() >>> idx_sort = df_lc['time'].values[:].argsort()
+#            pandas.drop_duplicates >>> numpy.unique(array)
+#
+# Updates v03:
+# 1) fix the error in Read_lc() which leads wrong values in pdc_err column.
+#
+# Updates v04:
+# 1) save only from quarter 1 forward, exclude quarter 0
+#
+# Updates v05:
+# 1) Use Hoaglin outliers removal
+# 2) Basic LC includes error in flux
 
-Note:pandas.sort() and pandas.drop_duplicates() causes some troubles when run on some architectures (big-endian conflict with little-endian processor). So were replaced by numpy functions:
- pandas.sort() >>> idx_sort = df_lc['time'].values[:].argsort()
- pandas.drop_duplicates >>> numpy.unique(array)
-
-'''
 # Python version: 2.7n
 # If use/modify, refer Francisco Paz-Chinchon 
 # Have fun & play your game.
+#
+#_______________________________________________________________________________
+# to indent in emacs: C-u C-x TAB and to select again C-x C-x
+#
 
 import os                        # walk through directories
 import pandas                    # dataframe use
@@ -176,7 +199,7 @@ if __name__ == "__main__":
   path_out = '/dados/home/fcoj/Work/KOI/methComp_lcurves/'
   
   # Filename of the IDs list
-  IDs = np.loadtxt(kic_file,dtype='int')
+  IDs = np.loadtxt(kic_file,dtype='int',comments='#')
   IDs = VerboseID(IDs)
 
   print '\n\tworking...\n'
@@ -226,12 +249,14 @@ if __name__ == "__main__":
     # I must discriminate between LCs with one quarter and LCs with more than one quarter,
     # in order to perform (or not):  sort, Fit, reset of indices
 
-    # Use only quarters from 1, not including quarter 0
-    df_lc = df_lc.loc[df_lc['Q'] > 0]
-    
     # If KIC have no fits in folder
     if counter_Qs == 0:
       summary_ls.append(kplr_id)
+      print 'No llc file found for {0}. Jumping to the next KIC'.format(kplr_id)
+      continue
+        
+    # Use only quarters from 1, not including quarter 0
+    df_lc = df_lc.loc[df_lc['Q'] > 0]
     
     # To know how time passed...
     if (index1+1)%100 == 0: 
