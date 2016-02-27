@@ -1,31 +1,11 @@
-# Script: fits2csv (former FitsToCSV)
-# Version: 01
-# This script takes the Kepler fits Long cadence files (using funtion Read_lc() ), applies a function 
-# called StepFit() to fix the gaps in mean flux between quarters, and finally save 2 types of 
-# light curves: 
-#  --- a complete version (time,time_corr,nflux,nflux_corr,quarter) and 
-#  --- a reduced version (time, nflux)
-#
-# The script requires as input a list of all KIC to be processed, in format 'kplrNNNNNNNNN'
-#
-# Updates v02:
-# 1) remove 3.5sigma outliers (flux), quarter by quarter, in the Read_lc() function
-# 2) pandas.sort() and pandas.drop_duplicates() causes some troubles when run on 
-# cluster, due to pc architecture (big-endian conflict with little-endian processor).
-# So were replaced by numpy functions:
-#            pandas.sort() >>> idx_sort = df_lc['time'].values[:].argsort()
-#            pandas.drop_duplicates >>> numpy.unique(array)
-#
-# Updates v03:
-# 1) fix the error in Read_lc() which leads wrong values in pdc_err column.
-#
-# Updates v04:
-# 1) save only from quarter 1 forward, exclude quarter 0
-#
-# Updates v05:
-# 1) Use Hoaglin outliers removal
-# 2) Basic LC includes error in flux
+'''This script takes the Kepler fits Long cadence files (using funtion Read_lc() ), applies a function called StepFit() to fix the gaps in mean flux between quarters, and finally save LCs.
+The script requires as input a list of all KIC to be processed (integer)
+Outliers are removed using Iglewicz and Hoaglin criteria
+Note:pandas.sort() and pandas.drop_duplicates() causes some troubles when run on some architectures (big-endian conflict with little-endian processor). So were replaced by numpy functions:
+ pandas.sort() >>> idx_sort = df_lc['time'].values[:].argsort()
+ pandas.drop_duplicates >>> numpy.unique(array)
 
+'''
 # Python version: 2.7n
 # If use/modify, refer Francisco Paz-Chinchon 
 # Have fun & play your game.
