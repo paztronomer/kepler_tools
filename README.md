@@ -59,6 +59,6 @@ curves as tracers of stellar rotation, and for support analysis and display
 
 
 **Notes**
-    * these codes does not follows PEP8 in some aspects,
-    * these codes were written without much optimization in mind
-    * keep in mind were written with no sharing in mind
+* these codes does not follows PEP8 in some aspects,
+* these codes were written without much optimization in mind
+* keep in mind were written with no sharing in mind
