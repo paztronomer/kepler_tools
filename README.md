@@ -1,6 +1,5 @@
 # Kepler data tools for fast analysis (old codes from my grad period)
-## Tools for Kepler raw data reading, reduction, model, and plotting
-## The repository also includes codes for other Time Series purposes
+## Tools for Kepler raw data reading, reduction, model, and plotting .The repository also includes codes for other Time Series purposes
 
 The scripts are mainly oriented to analysis of photometric variability in light
 curves as tracers of stellar rotation, and for support analysis and display
